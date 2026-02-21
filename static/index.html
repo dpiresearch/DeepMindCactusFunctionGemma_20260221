@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CubeSat Analysis — Predicted vs Actual</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --predicted: #f78166;
+      --actual: #3fb950;
+      --accent: #58a6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin: 0;
+      letter-spacing: -0.02em;
+    }
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    button {
+      font-family: inherit;
+      font-size: 0.875rem;
+      padding: 0.5rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    button:hover:not(:disabled) {
+      border-color: var(--accent);
+      background: #1c2128;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .legend {
+      display: flex;
+      gap: 1.25rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .legend span { display: flex; align-items: center; gap: 0.35rem; }
+    .legend .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .legend .dot.local { background: #f78166; }
+    .legend .dot.cloud { background: #58a6ff; }
+    .legend .dot.actual { background: var(--actual); }
+    #map {
+      flex: 1;
+      min-height: 400px;
+      width: 100%;
+    }
+    .status {
+      padding: 0.5rem 1.5rem;
+      font-size: 0.8125rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+    }
+    .status.error { color: #f85149; }
+    .status.success { color: var(--actual); }
+    .leaflet-popup-content-wrapper {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0;
+      font-size: 0.8125rem;
+    }
+    .leaflet-popup-tip { background: var(--surface); }
+    .popup-title { font-weight: 600; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+    .popup-body { padding: 0.5rem 0.75rem; }
+    .popup-body p { margin: 0.2rem 0; }
+    .popup-body .label { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CubeSat Analysis — Predicted vs Actual</h1>
+    <div class="controls">
+      <div class="legend">
+        <span><i class="dot local"></i> Local (FunctionGemma)</span>
+        <span><i class="dot cloud"></i> Cloud (Gemini)</span>
+        <span><i class="dot actual"></i> Actual (ground truth)</span>
+      </div>
+      <button type="button" id="run-btn">Run analysis</button>
+    </div>
+  </header>
+  <div id="map"></div>
+  <div class="status" id="status">Click “Run analysis” to process all cubesat-data*.json files and plot predicted vs actual positions on the map.</div>
+
+  <script>
+    const map = L.map("map", { center: [20, 0], zoom: 2 });
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      attribution: "&copy; OpenStreetMap, CartoDB",
+    }).addTo(map);
+
+    let layers = [];
+
+    function clearMap() {
+      layers.forEach(l => l.remove());
+      layers = [];
+    }
+
+    function fmtNum(v) {
+      if (v == null || typeof v !== "number") return "—";
+      return v.toFixed(4);
+    }
+
+    function addMarker(lat, lon, fillColor, borderColor, title, body) {
+      const marker = L.circleMarker([lat, lon], {
+        radius: 10,
+        fillColor,
+        color: borderColor,
+        weight: 2,
+        opacity: 1,
+        fillOpacity: 0.9,
+      });
+      marker.bindPopup(`
+        <div class="popup-title">${escapeHtml(title)}</div>
+        <div class="popup-body">${body}</div>`);
+      marker.addTo(map);
+      layers.push(marker);
+    }
+
+    function popupBody(lat, lon, altitude_km, datetime) {
+      return `
+        <p><span class="label">Lat:</span> ${fmtNum(lat)}°</p>
+        <p><span class="label">Lon:</span> ${fmtNum(lon)}°</p>
+        <p><span class="label">Alt:</span> ${altitude_km != null ? altitude_km + " km" : "—"}</p>
+        <p><span class="label">Time:</span> ${datetime || "—"}</p>`;
+    }
+
+    function validCoord(p) {
+      return p && typeof p.lat === "number" && typeof p.lon === "number" && !Number.isNaN(p.lat) && !Number.isNaN(p.lon);
+    }
+
+    function addResult(fileResult) {
+      // Support both new (local_predicted, cloud_predicted) and legacy (predicted) API shape
+      let { filename, local_predicted, cloud_predicted, actual, error } = fileResult;
+      if (fileResult.predicted != null && local_predicted == null && cloud_predicted == null) {
+        local_predicted = fileResult.predicted;
+      }
+      if (error) return;
+
+      const hasLocal = validCoord(local_predicted);
+      const hasCloud = validCoord(cloud_predicted);
+      const hasActual = validCoord(actual);
+
+      if (hasLocal) {
+        addMarker(
+          local_predicted.lat, local_predicted.lon,
+          "#f78166", "#da3633",
+          "Local (FunctionGemma) — " + filename,
+          popupBody(local_predicted.lat, local_predicted.lon, local_predicted.altitude_km, local_predicted.datetime)
+        );
+      }
+
+      if (hasCloud) {
+        addMarker(
+          cloud_predicted.lat, cloud_predicted.lon,
+          "#58a6ff", "#388bfd",
+          "Cloud (Gemini) — " + filename,
+          popupBody(cloud_predicted.lat, cloud_predicted.lon, cloud_predicted.altitude_km, cloud_predicted.datetime)
+        );
+      }
+
+      if (hasActual) {
+        addMarker(
+          actual.lat, actual.lon,
+          "#3fb950", "#2ea043",
+          "Actual (ground truth) — " + filename,
+          popupBody(actual.lat, actual.lon, actual.altitude_km, actual.datetime)
+        );
+      }
+
+      // Dashed line from actual to local or cloud if we have both
+      const predLat = hasCloud ? cloud_predicted.lat : hasLocal ? local_predicted.lat : null;
+      const predLon = hasCloud ? cloud_predicted.lon : hasLocal ? local_predicted.lon : null;
+      if (hasActual && predLat != null && predLon != null) {
+        const line = L.polyline(
+          [[actual.lat, actual.lon], [predLat, predLon]],
+          { color: "#8b949e", weight: 1, dashArray: "4,4" }
+        );
+        line.addTo(map);
+        layers.push(line);
+      }
+    }
+
+    function escapeHtml(s) {
+      const div = document.createElement("div");
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    async function runAnalysis() {
+      const btn = document.getElementById("run-btn");
+      const status = document.getElementById("status");
+      btn.disabled = true;
+      status.textContent = "Running analysis (this may take a minute)…";
+      status.className = "status";
+
+      try {
+        const res = await fetch("/api/run-analysis", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Request failed");
+
+        clearMap();
+        const results = data.results || [];
+        if (results.length === 0) {
+          status.textContent = data.error || "No cubesat-data*.json files found in data/.";
+          status.className = "status error";
+          return;
+        }
+
+        let bounds = null;
+        results.forEach(r => {
+          addResult(r);
+          const pred = r.local_predicted || r.predicted;
+          for (const p of [pred, r.cloud_predicted, r.actual]) {
+            if (validCoord(p)) {
+              const pt = [p.lat, p.lon];
+              bounds = bounds ? bounds.extend(pt) : L.latLngBounds(pt, pt);
+            }
+          }
+        });
+        if (bounds) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 10 });
+
+        const errCount = results.filter(r => r.error).length;
+        status.textContent = errCount
+          ? `Done. ${results.length - errCount} file(s) plotted; ${errCount} error(s).`
+          : `Done. ${results.length} file(s) plotted.`;
+        status.className = "status success";
+      } catch (e) {
+        status.textContent = "Error: " + (e.message || String(e));
+        status.className = "status error";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById("run-btn").addEventListener("click", runAnalysis);
+  </script>
+</body>
+</html>
