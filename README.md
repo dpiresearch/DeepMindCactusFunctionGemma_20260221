@@ -1,243 +1,121 @@
-<img src="assets/banner.png" alt="Logo" style="border-radius: 30px; width: 100%;">
+# CubeSat Imagery Analysis — Local-First Hybrid AI
 
-## Context
-- Cactus runs Google DeepMind's FunctionGemma at up to 3000 toks/sec prefill speed on M4 Macs.
-- While decode speed reaches 200 tokens/sec, all without GPU, to remain energy-efficient. 
-- FunctionGemma is great at tool calling, but small models are not the smartest for some tasks. 
-- There is a need to dynamically combine edge and cloud (Gemini Flash) to get the best of both worlds. 
-- Cactus develops various strategies for choosing when to fall back to Gemini or FunctionGemma.
+A **local-first, agentic** system that predicts CubeSat telemetry (geolocation, altitude, datetime) from six-camera imagery. It uses **FunctionGemma on Cactus** for fast on-device tool calling and **Gemini** as an intelligent cloud fallback when local confidence is low, with a web UI to run analysis and compare predictions to ground truth on a map.
 
-## Challenge
-- FunctionGemma is just a tool-call model, but tool calling is the core of agentic systems. 
-- You MUST design new strategies that decide when to stick with on-device or fall to cloud. 
-- You will be objectively ranked on tool-call correctness, speed and edge/cloud ratio (priortize local). 
-- You can focus on prompting, tool description patterns, confidence score algorithms, anything!
-- Please ensure at least 1 team member has a Mac, Cactus runs on Macs, mobile devices and wearables.
+---
 
-## Setup (clone this repo and hollistically follow)
-- Step 1: Fork this repo, clone to your Mac, open terminal.
-- Step 2: `git clone https://github.com/cactus-compute/cactus`
-- Step 3: `cd cactus && source ./setup && cd ..` (re-run in new terminal)
-- Step 4: `cactus build --python`
-- Step 5: `cactus download google/functiongemma-270m-it --reconvert`
-- Step 6: Get cactus key from the [cactus website](https://cactuscompute.com/dashboard/api-keys)
-- Sept 7: Run `cactus auth` and enter your token when prompted.
-- Step 8: `pip install google-genai`
-- Step 9: Obtain Gemini API key from [Google AI Studio](https://aistudio.google.com/api-keys)
-- Step 10: `export GEMINI_API_KEY="your-key"`
-- Step 11: Click on location to get Gemini credits - [SF](https://trygcp.dev/claim/cactus-x-gdm-hackathon-sf), [Boston](https://trygcp.dev/claim/cactus-x-gdm-hackathon-boston), [DC](https://trygcp.dev/claim/cactus-x-gdm-hackathon-dc), [London](https://trygcp.dev/claim/cactus-x-gdm-hackathon-london), [Singapore](https://trygcp.dev/claim/cactus-x-gdm-hackathon), [Online](https://trygcp.dev/claim/cactus-x-gdm-hackathon-online)
-- Step 12: Join the [Reddit channel](https://www.reddit.com/r/cactuscompute/), ask any technical questions there.
-- Step 13: read and run `python benchmark.py` to understand how objective scoring works.
-- Note: Final objective score will be done on held-out evals, top 10 are then judged subjectively.
+## Demo Overview
 
-## Submissions
-- Your main task is to modify the **internal logic** of the `generate_hybrid` method in `main.py`. 
-- Do not modify the input or output signature (function arguments and return variables) of the `generate_hybrid` method. Keep the hybrid interface compatible with `benchmark.py`.
-- Submit to the leaderboard `python submit.py --team "YourTeamName" --location "YourCity"`, only 1x every 1hr.
-- The dataset is a hidden Cactus eval, quite difficult for FunctionGemma by design.
-- Use `python benchmark.py` to iterate, but your best score is preserved.
-- For transparency, hackers can see live rankings on the [leaderboard](https://cactusevals.ngrok.app).
-- Leaderboard will start accepting submissions once event starts. 
-- The top hackers in each location will make it to judging.
+The project has two main surfaces: a **data-generation / analysis trigger** (frontend) and the **server** that runs Cactus + Gemini and prints predictions.
 
-## Qualitative Judging 
-- **Rubric 1**: The quality of your hybrid routing algorithm, depth and cleverness.
-- **Rubric 2**: End-to-end products that execute function calls to solve real-world problems. 
-- **Rubric 3**: Building low-latency voice-to-action products, leveraging `cactus_transcribe`.
+### 1. Generate data and run analysis (web app)
 
-## Quick Example
+The Flask-backed UI lets you run the full pipeline on all `data/cubesat-data*.json` files and see predicted vs actual positions on a world map.
 
-```python
-import json
-from cactus import cactus_init, cactus_complete, cactus_destroy
+![Screenshot of the app used to generate data and run analysis](images/generate.png)
 
-model = cactus_init("weights/lfm2-vl-450m")
-messages = [{"role": "user", "content": "What is 2+2?"}]
-response = json.loads(cactus_complete(model, messages))
-print(response["response"])
+*Use “Run analysis” to process all CubeSat JSON files; the map shows Local (FunctionGemma), Cloud (Gemini), and Actual (ground truth) points per file.*
 
-cactus_destroy(model)
-```
+### 2. Server: Cactus + Gemini predictions
 
-## API Reference
+The server runs the same logic as `python cubesat_analysis.py`: FunctionGemma (Cactus) first, then optional Gemini fallback. Predictions and cloud decisions are printed to the console.
 
-### `cactus_init(model_path, corpus_dir=None)`
+![Screenshot of the server using Cactus and Gemini for predictions](images/analysis.png)
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `model_path` | `str` | Path to model weights directory |
-| `corpus_dir` | `str` | (Optional) dir of txt/md files for auto-RAG |
+*Console output shows on-device vs cloud routing, confidence, and per-file predictions.*
 
-```python
-model = cactus_init("weights/lfm2-vl-450m")
-model = cactus_init("weights/lfm2-rag", corpus_dir="./documents")
-```
+---
 
-### `cactus_complete(model, messages, **options)`
+## How It Works
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `model` | handle | Model handle from `cactus_init` |
-| `messages` | `list\|str` | List of message dicts or JSON string |
-| `tools` | `list` | Optional tool definitions for function calling |
-| `temperature` | `float` | Sampling temperature |
-| `top_p` | `float` | Top-p sampling |
-| `top_k` | `int` | Top-k sampling |
-| `max_tokens` | `int` | Maximum tokens to generate |
-| `stop_sequences` | `list` | Stop sequences |
-| `include_stop_sequences` | `bool` | Include matched stop sequences in output (default: `False`) |
-| `force_tools` | `bool` | Constrain output to tool call format |
-| `tool_rag_top_k` | `int` | Select top-k relevant tools via Tool RAG (default: 2, 0 = use all tools) |
-| `confidence_threshold` | `float` | Minimum confidence for local generation (default: 0.7, triggers cloud_handoff when below) |
-| `callback` | `fn` | Streaming callback `fn(token, token_id, user_data)` |
+- **Input:** JSON files under `data/` containing six base64-encoded camera images (Nadir, Zenith, Forward, Backward, Port, Starboard) plus optional ground-truth telemetry.
+- **On-device (Step 1):** FunctionGemma (via Cactus) is called **three times**—once per tool: `predict_geolocation`, `predict_altitude`, `predict_datetime`. Each call uses a fixed scene brief (text) and returns a structured tool call with confidence. Results are aggregated (valid calls, average/min confidence).
+- **Routing:** If **average confidence ≥ threshold** (default 0.75) and **at least two tools** return a valid call, the **local result is used**. Otherwise the system **defers to Gemini**.
+- **Cloud (Step 2, when needed):** Gemini 2.5 Flash receives the **actual six images** (multimodal) and is asked to call all three tools. Its output is used as the final prediction; local run is still kept for comparison and reporting.
+- **Output:** Per-file predictions (local and/or cloud), comparison table (FunctionGemma vs Gemini vs ground truth), and optional map UI with markers and inference times.
 
-```python
-# Basic completion
-messages = [{"role": "user", "content": "Hello!"}]
-response = cactus_complete(model, messages, max_tokens=100)
-print(json.loads(response)["response"])
-```
+---
 
-```python
-# Completion with tools
-tools = [{
-    "name": "get_weather",
-    "description": "Get weather for a location",
-    "parameters": {
-        "type": "object",
-        "properties": {"location": {"type": "string"}},
-        "required": ["location"]
-    }
-}]
+## Alignment with Judging Criteria
 
-response = cactus_complete(model, messages, tools=tools)
-cactus_complete(model, messages, callback=on_token)
-```
+We have tailored the project to the four criteria for **local-first, agentic, hybrid AI systems**.
 
-**Response format** (all fields always present):
-```json
-{
-    "success": true,
-    "error": null,
-    "cloud_handoff": false,
-    "response": "Hello! How can I help?",
-    "function_calls": [],
-    "confidence": 0.85,
-    "time_to_first_token_ms": 45.2,
-    "total_time_ms": 163.7,
-    "prefill_tps": 619.5,
-    "decode_tps": 168.4,
-    "ram_usage_mb": 245.67,
-    "prefill_tokens": 28,
-    "decode_tokens": 50,
-    "total_tokens": 78
-}
-```
+---
 
-**Cloud handoff response** (when model detects low confidence):
-```json
-{
-    "success": false,
-    "error": null,
-    "cloud_handoff": true,
-    "response": null,
-    "function_calls": [],
-    "confidence": 0.18,
-    "time_to_first_token_ms": 45.2,
-    "total_time_ms": 45.2,
-    "prefill_tps": 619.5,
-    "decode_tps": 0.0,
-    "ram_usage_mb": 245.67,
-    "prefill_tokens": 28,
-    "decode_tokens": 0,
-    "total_tokens": 28
-}
-```
+### 1. Functionality & Execution
 
-- When `cloud_handoff` is `True`, the model's confidence dropped below `confidence_threshold` (default: 0.7) and recommends deferring to a cloud-based model for better results. 
+**Criterion:** *Did the team ship a working demo that successfully integrates the required components? A score of 5 means the application runs smoothly on-device (mobile/desktop) with zero critical bugs.*
 
-- You will NOT rely on this, hackers must design custom strategies to fall-back to cloud, that maximizes on-devices and correctness, while minimizing end-to-end latency!
+**What we deliver:**
 
-### `cactus_transcribe(model, audio_path, prompt="")`
+- **CLI:** `python cubesat_analysis.py` runs on a Mac with Cactus + FunctionGemma; processes all `data/cubesat-data*.json` files; prints predictions and a comparison table (FunctionGemma vs Gemini vs ground truth). No cloud required if you only want local output.
+- **Server + UI:** `python cubesat_server.py` serves a web app that triggers the same analysis and displays results on a map (local, cloud, and actual points). End-to-end flow runs reliably.
+- **Integration:** Cactus (FunctionGemma) and Gemini (when used) are wired through a single pipeline (`cubesat_analysis.analyse_cubesat_hybrid`), with clear handling for missing API keys (graceful fallback to local-only).
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `model` | handle | Whisper model handle |
-| `audio_path` | `str` | Path to audio file (WAV) |
-| `prompt` | `str` | Whisper prompt for language/task |
+The app runs on-device for the local path and demonstrates core features (tool calls, routing, comparison, map) without critical bugs.
 
-```python
-whisper = cactus_init("weights/whisper-small")
-prompt = "<|startoftranscript|><|en|><|transcribe|><|notimestamps|>"
-response = cactus_transcribe(whisper, "audio.wav", prompt=prompt)
-print(json.loads(response)["response"])
-cactus_destroy(whisper)
-```
+---
 
-### `cactus_embed(model, text, normalize=False)`
+### 2. Hybrid Architecture & Routing
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `model` | handle | Model handle |
-| `text` | `str` | Text to embed |
-| `normalize` | `bool` | L2-normalize embeddings (default: False) |
+**Criterion:** *How effectively was the core challenge—deciding where computation happens (local vs. cloud)—solved? Judges the intelligence of the edge/cloud split.*
 
-```python
-embedding = cactus_embed(model, "Hello world")
-print(f"Dimension: {len(embedding)}")
-```
+**What we deliver:**
 
-### `cactus_reset(model)`
+- **Explicit local-first policy:** Every request runs **FunctionGemma (Cactus) first**; cloud is used only when local is deemed insufficient.
+- **Data-driven routing:** The split is based on **model-reported confidence** and **tool-call validity:**
+  - Average confidence (over the three tool calls) must be ≥ configurable threshold (e.g. 0.75).
+  - At least two of three tools (e.g. geolocation + altitude) must return a valid call.
+- **Seamless fallback:** If confidence is low or too few tools succeed, the system **automatically defers** to Gemini, sends the real images, and uses cloud output as the final prediction while still retaining local results for comparison and debugging.
+- **Transparency:** Console and UI show which path was used (local vs cloud), confidence values, and (when cloud ran) both local and cloud predictions plus timing.
 
-Reset model state (clear KV cache). Call between unrelated conversations.
+This is **dynamic, context-dependent routing** (confidence + validity), not a static “always cloud” or “always local” setup, with clear fallback and escalation.
 
-```python
-cactus_reset(model)
-```
+---
 
-### `cactus_stop(model)`
+### 3. Agentic Capability & Utility
 
-Stop an ongoing generation (useful with streaming callbacks).
+**Criterion:** *Does the application demonstrate meaningful agentic behavior (reasoning, tool use, workflow coordination) that benefits from being local-first?*
 
-```python
-cactus_stop(model)
-```
+**What we deliver:**
 
-### `cactus_destroy(model)`
+- **Structured tool use:** The system coordinates **three tools** in a single workflow: `predict_geolocation`, `predict_altitude`, `predict_datetime`. Each tool returns typed arguments (e.g. lat/lon, altitude_km, estimated_datetime) and confidence.
+- **Multi-step workflow:** (1) Run three focused Cactus inferences, (2) aggregate and evaluate confidence, (3) decide local vs cloud, (4) optionally run Gemini with full images, (5) merge and report. This is an **agentic pipeline** (sensing → reasoning → tool calls → routing → response).
+- **Local-first benefit:** On-device FunctionGemma gives **low-latency** first-pass predictions and keeps **sensitive imagery** off the network when confidence is high. The cloud is used only when the small model signals uncertainty, improving both responsiveness and privacy.
 
-Free model memory. Always call when done.
+The result is a **useful agent workflow** (telemetry from imagery) that clearly benefits from local speed and optional cloud escalation.
 
-```python
-cactus_destroy(model)
-```
+---
 
-### `cactus_get_last_error()`
+### 4. Theme Alignment (Local-First & Tech Stack)
 
-Get the last error message, or `None` if no error.
+**Criterion:** *How deeply and creatively were FunctionGemma and Cactus Compute utilized to achieve local-first goals (latency, privacy, offline capability)?*
 
-```python
-error = cactus_get_last_error()
-if error:
-    print(f"Error: {error}")
-```
+**What we deliver:**
 
-### `cactus_rag_query(model, query, top_k=5)`
+- **FunctionGemma + Cactus are central:** All on-device inference goes through **Cactus** (init → complete → destroy). FunctionGemma 270M is loaded from Cactus weights and used **three times per request** (one per tool) with tool schemas and `force_tools=True`. The design is built around “run small model on-device first.”
+- **Latency:** Local path avoids network round-trips; users get immediate predictions when confidence is high. Cloud is only invoked when necessary.
+- **Privacy:** When the local path is taken, **images never leave the device**; only a fixed text scene brief is used for FunctionGemma. When fallback occurs, the choice is explicit and logged.
+- **Offline capability:** If `GEMINI_API_KEY` is unset, the system still runs and returns the best available **on-device** results, with a clear message that cloud was skipped. The architecture is **fundamentally dependent** on Cactus + FunctionGemma for the default, fast path; Gemini is an optional enhancement.
 
-Query RAG corpus for relevant text chunks. Requires model initialized with `corpus_dir`.
+The stack is used in a way that makes **local-first** (speed, privacy, offline) a core property of the architecture, not an afterthought.
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `model` | handle | Model handle (must have corpus_dir set) |
-| `query` | `str` | Query text |
-| `top_k` | `int` | Number of chunks to retrieve (default: 5) |
+---
 
-```python
-model = cactus_init("weights/lfm2-rag", corpus_dir="./documents")
-chunks = cactus_rag_query(model, "What is machine learning?", top_k=3)
-for chunk in chunks:
-    print(f"Score: {chunk['score']:.2f} - {chunk['text'][:100]}...")
-```
+## Repo Layout (relevant to this project)
 
-## Next steps:
-- Join the [Reddit channel](https://www.reddit.com/r/cactuscompute/), ask any technical questions there.
-- To gain some technical insights on AI, checkout [Maths, CS & AI Compendium](https://github.com/HenryNdubuaku/maths-cs-ai-compendium). 
+| Path | Purpose |
+|------|--------|
+| `cubesat_analysis.py` | Core pipeline: load data, run Cactus (FunctionGemma) and optionally Gemini, compare to ground truth, print table. |
+| `cubesat_server.py` | Flask server: exposes same analysis as an API and serves the map UI; prints cloud predictions to console. |
+| `static/index.html` | Web UI: “Run analysis” button, Leaflet map with Local / Cloud / Actual markers. |
+| `data/cubesat-data*.json` | CubeSat JSON files (images + optional telemetry). |
+
+**Run CLI:** `python cubesat_analysis.py`  
+**Run server + UI:** `python cubesat_server.py` → open http://127.0.0.1:5000
+
+---
+
+## Summary
+
+This project implements a **local-first, agentic, hybrid** system for CubeSat telemetry prediction: **FunctionGemma on Cactus** for on-device tool calling and **Gemini** for intelligent cloud fallback when confidence is low. It ships as a working CLI and web demo, with routing based on confidence and tool validity, meaningful multi-tool workflow, and architecture that depends on Cactus + FunctionGemma for latency, privacy, and offline capability.
