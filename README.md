@@ -6,11 +6,11 @@ A **local-first, agentic** system that predicts CubeSat telemetry (geolocation, 
 
 ## Demo Overview
 
-The project has two main surfaces: a **data-generation / analysis trigger** (frontend) and the **server** that runs Cactus + Gemini and prints predictions.
+The project has two main surfaces: a **data-generation (frontend) and the **server** that runs Cactus + Gemini and prints predictions.
 
-### 1. Generate data and run analysis (web app)
+### 1. Generate data (web app)
 
-The Flask-backed UI lets you run the full pipeline on all `data/cubesat-data*.json` files and see predicted vs actual positions on a world map.
+This is an app built using Google AI Builder that simulates a satellite in orbit and produces image and telemetry data at a point of the user's choosing.  This generated data is used as input into the analysis/prediction part.
 
 ![Screenshot of the app used to generate data and run analysis](images/generate.png)
 
