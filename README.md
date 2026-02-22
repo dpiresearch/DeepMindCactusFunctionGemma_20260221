@@ -2,6 +2,9 @@
 
 A **local-first, agentic** system that predicts CubeSat telemetry (geolocation, altitude, datetime) from six-camera imagery. It uses **FunctionGemma on Cactus** for fast on-device tool calling and **Gemini** as an intelligent cloud fallback when local confidence is low, with a web UI to run analysis and compare predictions to ground truth on a map.
 
+## Problem statement
+Cubesats deploy different sensors to guage where they are in space.  Sun sensors, star trackers, gyros and magnetometers are expensive and also take up space and add weight.  If an off-the-shelf camera that does earth imaging can do double duty and help with attitude control, it would lower the expense of satellite development.
+
 ---
 
 ## Demo Overview
